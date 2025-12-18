@@ -1,4 +1,4 @@
-name: FTC Universal Quick Tests (ORAN + ONAP Compatible)
+name: FTC Suite-policy-all Tests (Standard)
 
 on:
   workflow_dispatch:
@@ -26,16 +26,24 @@ on:
           - 'remote-remove docker'
 
 jobs:
-  # Quick tests - typically complete within 1-2 hours
-  ftc-quick-tests:
+  # Matrix strategy to run all FTC tests in parallel with isolated environments
+  # Each test gets its own GitHub runner instance for complete Docker isolation
+  ftc-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # 3 hours timeout
+    timeout-minutes: 420  # 7 hours timeout for long-running tests
     strategy:
-      fail-fast: false
-      max-parallel: 1  # Each test runs on separate runner instance for Docker isolation
+      fail-fast: false  # Continue other tests even if one fails
+      max-parallel: 8  # Each test runs on separate runner instance for Docker isolation
       matrix:
         test_case: [
-          'FTC1_A1PMS_ADAPTER' # A1PMS adapter (ORAN + ONAP) - Representative test for quick validation
+          'FTC1',              # Basic sanity test (from Suite-policy-all.sh)
+          'FTC10',             # Basic API test (from Suite-policy-all.sh)
+          'FTC110',            # Basic API test (from Suite-policy-all.sh)
+          'FTC150',            # Basic config test (from Suite-policy-all.sh)
+          'FTC300',            # Config changes (from Suite-policy-all.sh)
+          'FTC310',            # Config sync (from Suite-policy-all.sh)
+          'FTC350',            # Config test (from Suite-policy-all.sh)
+          'FTC850'             # Stability test (from Suite-policy-all.sh)
         ]
 
     steps:
@@ -101,6 +109,26 @@ jobs:
         # Reset Docker daemon to clean state
         sudo systemctl restart docker
         sleep 10
+        
+        # Verify clean state
+        echo "=== Docker Environment Status ==="
+        docker ps -a
+        docker images
+        docker network ls
+        docker volume ls
+
+    - name: Set up test environment variables
+      run: |
+        # Create unique identifiers for this test instance
+        TEST_INSTANCE_ID="${{ matrix.test_case }}-$(date +%s)-$$"
+        echo "TEST_CASE=${{ matrix.test_case }}" >> $GITHUB_ENV
+        echo "TEST_INSTANCE_ID=${TEST_INSTANCE_ID}" >> $GITHUB_ENV
+        echo "EXECUTION_MODE=${{ github.event.inputs.execution_mode }}" >> $GITHUB_ENV
+        echo "TEST_ENV_FILE=${{ github.event.inputs.test_env_file }}" >> $GITHUB_ENV
+        echo "WORKSPACE_PATH=${{ github.workspace }}" >> $GITHUB_ENV
+        
+        # Set unique container prefix to avoid conflicts
+        echo "CONTAINER_PREFIX=gh-${{ matrix.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)" >> $GITHUB_ENV
 
     - name: Create logs directory and fix permissions
       run: |
@@ -117,17 +145,17 @@ jobs:
     - name: Run FTC Test - ${{ matrix.test_case }}
       working-directory: test/auto-test
       run: |
+        # Set executable permissions
         chmod +x ./${{ matrix.test_case }}.sh
         chmod +x ../common/*.sh
         
-        # Create unique container prefix for isolation
-        CONTAINER_PREFIX="gh-${{ matrix.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)"
+        # Export container prefix for test isolation
         export RICSIM_PREFIX="${CONTAINER_PREFIX}"
         export DOCKER_COMPOSE_PROJECT_NAME="${CONTAINER_PREFIX}"
         
         # Run the test and capture exit code
         set +e  # Don't exit on error, we want to handle it
-        timeout 2h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --print-stats --gen-stats 2>&1 | tee test_output.log
+        timeout 6h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --print-stats --gen-stats --endpoint-stats 2>&1 | tee test_output.log
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e  # Re-enable exit on error
         
@@ -151,7 +179,7 @@ jobs:
           fi
         elif [ $TEST_EXIT_CODE -eq 124 ]; then
           echo "TEST_RESULT=TIMEOUT" >> $GITHUB_ENV
-          echo "⏰ Test ${{ matrix.test_case }} TIMED OUT"
+          echo "⏰ Test ${{ matrix.test_case }} TIMED OUT after 6 hours"
           exit 1  # Fail the workflow step
         else
           echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
@@ -162,20 +190,25 @@ jobs:
     - name: Collect test artifacts
       if: always()
       run: |
+        # Create artifact directory
         mkdir -p ${{ github.workspace }}/artifacts/${{ matrix.test_case }}
         
+        # Copy logs if they exist
         if [ -d "test/auto-test/logs/${{ matrix.test_case }}" ]; then
           cp -r test/auto-test/logs/${{ matrix.test_case }}/* ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
         fi
         
+        # Copy test output
         if [ -f "test/auto-test/test_output.log" ]; then
           cp test/auto-test/test_output.log ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
         fi
         
+        # Copy result files
         if [ -f "test/auto-test/.result${{ matrix.test_case }}.txt" ]; then
           cp test/auto-test/.result${{ matrix.test_case }}.txt ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
         fi
         
+        # Create summary file
         echo "Test Case: ${{ matrix.test_case }}" > ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
         echo "Result: ${TEST_RESULT:-UNKNOWN}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
         echo "Execution Mode: ${{ github.event.inputs.execution_mode }}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
@@ -186,27 +219,45 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ftc-quick-results-${{ matrix.test_case }}
+        name: ftc-test-results-${{ matrix.test_case }}
         path: artifacts/${{ matrix.test_case }}/
-        retention-days: 14
+        retention-days: 30
 
     - name: Clean up Docker after test
       if: always()
       run: |
-        # Comprehensive cleanup
+        # Comprehensive cleanup to free resources for next test
+        echo "=== Cleaning up Docker environment ==="
+        
+        # Stop all containers
         docker ps -aq | xargs -r docker stop -t 10 || true
         docker ps -aq | xargs -r docker rm -f || true
+        
+        # Remove all networks (except default)
         docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        
+        # Remove all volumes
         docker volume ls -q | xargs -r docker volume rm -f || true
+        
+        # Remove all images to free space
         docker images -q | xargs -r docker rmi -f || true
+        
+        # Final cleanup
         docker system prune -af --volumes || true
         
         # Clean up mounted directories that may have permission issues
         sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
         sudo rm -f test/auto-test/logs/*/*.log 2>/dev/null || true
+        
+        # Show final state
+        echo "=== Final Docker State ==="
+        docker ps -a
+        docker images
+        df -h
 
+  # Summary job that runs after all tests complete
   test-summary:
-    needs: ftc-quick-tests
+    needs: ftc-tests
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -217,30 +268,36 @@ jobs:
 
     - name: Generate test summary
       run: |
-        echo "# FTC Quick Test Results Summary" > test_summary.md
+        echo "# FTC Test Results Summary" > test_summary.md
         echo "" >> test_summary.md
         echo "**Execution Details:**" >> test_summary.md
         echo "- Environment File: ${{ github.event.inputs.test_env_file }}" >> test_summary.md
         echo "- Execution Mode: ${{ github.event.inputs.execution_mode }}" >> test_summary.md
         echo "- Timestamp: $(date)" >> test_summary.md
         echo "" >> test_summary.md
-        echo "| Test Case | Result | Duration | Logs |" >> test_summary.md
-        echo "|-----------|--------|----------|------|" >> test_summary.md
+        echo "| Test Case | Result | Logs |" >> test_summary.md
+        echo "|-----------|--------|------|" >> test_summary.md
         
         total_tests=0
         passed_tests=0
+        failed_tests=0
+        timeout_tests=0
         
-        for dir in all-results/ftc-quick-results-*/; do
+        for dir in all-results/ftc-test-results-*/; do
           if [ -d "$dir" ]; then
-            test_name=$(basename "$dir" | sed 's/ftc-quick-results-//')
+            test_name=$(basename "$dir" | sed 's/ftc-test-results-//')
             total_tests=$((total_tests + 1))
             
             if [ -f "$dir/summary.txt" ]; then
               result=$(grep "Result:" "$dir/summary.txt" | cut -d' ' -f2)
-              [ "$result" = "PASS" ] && passed_tests=$((passed_tests + 1))
-              echo "| $test_name | $result | - | [View Logs](all-results/ftc-quick-results-$test_name/) |" >> test_summary.md
+              case "$result" in
+                "PASS") passed_tests=$((passed_tests + 1)) ;;
+                "FAIL") failed_tests=$((failed_tests + 1)) ;;
+                "TIMEOUT") timeout_tests=$((timeout_tests + 1)) ;;
+              esac
+              echo "| $test_name | $result | [View Logs](all-results/ftc-test-results-$test_name/) |" >> test_summary.md
             else
-              echo "| $test_name | UNKNOWN | - | [View Logs](all-results/ftc-quick-results-$test_name/) |" >> test_summary.md
+              echo "| $test_name | UNKNOWN | [View Logs](all-results/ftc-test-results-$test_name/) |" >> test_summary.md
             fi
           fi
         done
@@ -249,11 +306,26 @@ jobs:
         echo "**Summary Statistics:**" >> test_summary.md
         echo "- Total Tests: $total_tests" >> test_summary.md
         echo "- Passed: $passed_tests" >> test_summary.md
-        echo "- Failed: $((total_tests - passed_tests))" >> test_summary.md
+        echo "- Failed: $failed_tests" >> test_summary.md
+        echo "- Timeout: $timeout_tests" >> test_summary.md
         echo "- Success Rate: $(( passed_tests * 100 / total_tests ))%" >> test_summary.md
 
     - name: Upload summary
       uses: actions/upload-artifact@v4
       with:
-        name: quick-test-summary
+        name: test-summary
         path: test_summary.md
+
+    - name: Comment PR or Issue (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('test_summary.md', 'utf8');
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: summary
+          });
