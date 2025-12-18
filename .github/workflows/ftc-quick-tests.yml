@@ -126,6 +126,22 @@ jobs:
         mkdir -p test/simulator-group/a1pms/mnt/db
         mkdir -p test/simulator-group/ics/mnt/db
         mkdir -p test/simulator-group/sdnc/mnt
+        mkdir -p test/simulator-group/control_panel/mnt
+        mkdir -p test/simulator-group/cr/mnt
+        mkdir -p test/simulator-group/prodstub/mnt
+        mkdir -p test/simulator-group/mrstub/mnt
+        
+        # Copy required config files to mount directories
+        # Control Panel nginx.conf (for ORAN releases)
+        if [ -f "test/simulator-group/control_panel/nginx.conf" ]; then
+          cp test/simulator-group/control_panel/nginx.conf test/simulator-group/control_panel/mnt/ || true
+        fi
+        
+        # Control Panel application.properties (for ONAP releases)  
+        if [ -f "test/simulator-group/control_panel/application.properties" ]; then
+          cp test/simulator-group/control_panel/application.properties test/simulator-group/control_panel/mnt/ || true
+        fi
+        
         chmod -R 777 test/simulator-group/*/mnt/ || true
 
     - name: Run FTC Test - ${{ matrix.test_case }}
