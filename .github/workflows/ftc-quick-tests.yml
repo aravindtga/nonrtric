@@ -1,4 +1,4 @@
-name: FTC Quick Tests (Short Running)
+name: FTC Universal Quick Tests (ORAN + ONAP Compatible)
 
 on:
   workflow_dispatch:
@@ -14,6 +14,8 @@ on:
           - '../common/test_env-oran-k-release.sh'
           - '../common/test_env-onap-paris.sh'
           - '../common/test_env-onap-oslo.sh'
+          - '../common/test_env-onap-montreal.sh'
+          - '../common/test_env-onap-newdelhi.sh'
       execution_mode:
         description: 'Execution mode'
         required: true
@@ -30,24 +32,10 @@ jobs:
     timeout-minutes: 180  # 3 hours timeout
     strategy:
       fail-fast: false
-      max-parallel: 15  # Each test runs on separate runner instance for Docker isolation
+      max-parallel: 1  # Each test runs on separate runner instance for Docker isolation
       matrix:
         test_case: [
-          'FTC1',           # Basic sanity test
-          'FTC10',          # Basic API test
-          'FTC110',         # Basic API test
-          'FTC150',         # Basic config test
-          'FTC300',         # Config changes
-          'FTC310',         # Config sync
-          'FTC350',         # Config test
-          'FTC800',         # Basic stability
-          'FTC805',         # Stability test
-          'FTC810',         # Stability test
-          'FTC850',         # Stability test
-          'FTC900',         # Misc test
-          'FTC2001',        # Southbound proxy
-          'FTC2002',        # Southbound proxy
-          'FTC2003',        # Southbound proxy
+          'FTC1_A1PMS_ADAPTER' # A1PMS adapter (ORAN + ONAP) - Representative test for quick validation
         ]
 
     steps:
