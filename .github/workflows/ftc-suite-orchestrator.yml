@@ -103,7 +103,8 @@ jobs:
         TRIGGERED_COUNT=0
         FAILED_COUNT=0
         
-        for test in $TESTS_TO_RUN; dotest]}"
+        for test in $TESTS_TO_RUN; do
+          workflow_file="${FTC_WORKFLOWS[$test]}"
           echo "Triggering $test using $workflow_file..."
           
           # Trigger the workflow
