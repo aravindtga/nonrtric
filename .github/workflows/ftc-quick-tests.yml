@@ -106,13 +106,27 @@ jobs:
         docker volume ls -q | xargs -r docker volume rm || true
         docker system prune -af --volumes || true
         
+        # Clean up any leftover mounted directories with permission issues
+        sudo find test/simulator-group -name "mnt" -type d -exec rm -rf {} + 2>/dev/null || true
+        sudo find test/simulator-group -name "*.log" -delete 2>/dev/null || true
+        
         # Reset Docker daemon to clean state
         sudo systemctl restart docker
         sleep 10
 
-    - name: Create logs directory
+    - name: Create logs directory and fix permissions
       run: |
         mkdir -p ${{ github.workspace }}/test/auto-test/logs/${{ matrix.test_case }}
+        
+        # Ensure proper permissions for simulator directories
+        sudo chown -R $USER:$USER test/simulator-group/ || true
+        sudo chmod -R 755 test/simulator-group/ || true
+        
+        # Create mount directories with proper permissions
+        mkdir -p test/simulator-group/a1pms/mnt/db
+        mkdir -p test/simulator-group/ics/mnt/db
+        mkdir -p test/simulator-group/sdnc/mnt
+        chmod -R 777 test/simulator-group/*/mnt/ || true
 
     - name: Run FTC Test - ${{ matrix.test_case }}
       working-directory: test/auto-test
@@ -200,6 +214,10 @@ jobs:
         docker volume ls -q | xargs -r docker volume rm -f || true
         docker images -q | xargs -r docker rmi -f || true
         docker system prune -af --volumes || true
+        
+        # Clean up mounted directories that may have permission issues
+        sudo find test/simulator-group -name "mnt" -type d -exec rm -rf {} + 2>/dev/null || true
+        sudo find test/auto-test/logs -name "*.log" -delete 2>/dev/null || true
 
   test-summary:
     needs: ftc-quick-tests
