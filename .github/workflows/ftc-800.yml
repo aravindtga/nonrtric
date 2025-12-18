@@ -30,6 +30,6 @@ jobs:
     uses: ./.github/workflows/ftc-test-template.yml
     with:
       test_case: 'FTC800'
-      test_env_file: ${{ inputs.test_case }}
+      test_env_file: ${{ inputs.test_env_file }}
       execution_mode: ${{ inputs.execution_mode }}
       timeout_minutes: 360
