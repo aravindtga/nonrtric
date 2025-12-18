@@ -3132,8 +3132,9 @@ a1pms_api_put_services_keepalive() {
   fi
 
   if [ "$A1PMS_VERSION" == "V3" ]; then
-    empty_json_body={}
-    res="$(__do_curl_to_api A1PMS PUT ${query} ${empty_json_body})"
+    file="./tmp/.empty.json"
+    echo "{}" > $file
+    res="$(__do_curl_to_api A1PMS PUT ${query} ${file})"
   else
     res="$(__do_curl_to_api A1PMS PUT ${query})"
   fi
