@@ -107,8 +107,8 @@ jobs:
         docker system prune -af --volumes || true
         
         # Clean up any leftover mounted directories with permission issues
-        sudo find test/simulator-group -name "mnt" -type d -exec rm -rf {} + 2>/dev/null || true
-        sudo find test/simulator-group -name "*.log" -delete 2>/dev/null || true
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/simulator-group/*/*.log 2>/dev/null || true
         
         # Reset Docker daemon to clean state
         sudo systemctl restart docker
@@ -121,47 +121,6 @@ jobs:
         # Ensure proper permissions for simulator directories
         sudo chown -R $USER:$USER test/simulator-group/ || true
         sudo chmod -R 755 test/simulator-group/ || true
-        
-        # Create mount directories with proper permissions
-        mkdir -p test/simulator-group/a1pms/mnt/db
-        mkdir -p test/simulator-group/ics/mnt/db
-        mkdir -p test/simulator-group/sdnc/mnt
-        mkdir -p test/simulator-group/control_panel/mnt
-        mkdir -p test/simulator-group/ngw/mnt
-        mkdir -p test/simulator-group/cr/mnt
-        mkdir -p test/simulator-group/prodstub/mnt
-        mkdir -p test/simulator-group/mrstub/mnt
-        
-        # Copy required config files to mount directories
-        # Control Panel nginx.conf (for ORAN releases)
-        if [ -f "test/simulator-group/control_panel/nginx.conf" ]; then
-          cp test/simulator-group/control_panel/nginx.conf test/simulator-group/control_panel/mnt/ || true
-        fi
-        
-        # Control Panel application.properties (for ONAP releases)  
-        if [ -f "test/simulator-group/control_panel/application.properties" ]; then
-          cp test/simulator-group/control_panel/application.properties test/simulator-group/control_panel/mnt/ || true
-        fi
-        
-        # NonRT-RIC Gateway application.yaml
-        if [ -f "test/simulator-group/ngw/application.yaml" ]; then
-          cp test/simulator-group/ngw/application.yaml test/simulator-group/ngw/mnt/ || true
-        fi
-        
-        # A1PMS application.yaml files
-        if [ -f "test/simulator-group/a1pms/application.yaml" ]; then
-          cp test/simulator-group/a1pms/application.yaml test/simulator-group/a1pms/mnt/ || true
-        fi
-        if [ -f "test/simulator-group/a1pms/application2.yaml" ]; then
-          cp test/simulator-group/a1pms/application2.yaml test/simulator-group/a1pms/mnt/ || true
-        fi
-        
-        # ICS application.yaml
-        if [ -f "test/simulator-group/ics/application.yaml" ]; then
-          cp test/simulator-group/ics/application.yaml test/simulator-group/ics/mnt/ || true
-        fi
-        
-        chmod -R 777 test/simulator-group/*/mnt/ || true
 
     - name: Run FTC Test - ${{ matrix.test_case }}
       working-directory: test/auto-test
@@ -251,8 +210,8 @@ jobs:
         docker system prune -af --volumes || true
         
         # Clean up mounted directories that may have permission issues
-        sudo find test/simulator-group -name "mnt" -type d -exec rm -rf {} + 2>/dev/null || true
-        sudo find test/auto-test/logs -name "*.log" -delete 2>/dev/null || true
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/auto-test/logs/*/*.log 2>/dev/null || true
 
   test-summary:
     needs: ftc-quick-tests
