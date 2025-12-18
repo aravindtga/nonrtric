@@ -1,0 +1,35 @@
+name: FTC850 - Stability Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_env_file:
+        description: 'Test environment file to use'
+        required: true
+        default: '../common/test_env-oran-m-release.sh'
+        type: choice
+        options:
+          - '../common/test_env-oran-m-release.sh'
+          - '../common/test_env-oran-l-release.sh'
+          - '../common/test_env-oran-k-release.sh'
+          - '../common/test_env-onap-paris.sh'
+          - '../common/test_env-onap-oslo.sh'
+          - '../common/test_env-onap-montreal.sh'
+          - '../common/test_env-onap-newdelhi.sh'
+      execution_mode:
+        description: 'Execution mode'
+        required: true
+        default: 'remote docker'
+        type: choice
+        options:
+          - 'remote docker'
+          - 'remote-remove docker'
+
+jobs:
+  ftc850-test:
+    uses: ./.github/workflows/ftc-test-template.yml
+    with:
+      test_case: 'FTC850'
+      test_env_file: ${{ inputs.test_env_file }}
+      execution_mode: ${{ inputs.execution_mode }}
+      timeout_minutes: 180

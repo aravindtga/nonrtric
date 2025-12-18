@@ -1,0 +1,239 @@
+name: FTC Test Template (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      test_case:
+        description: 'FTC test case to run (e.g., FTC1, FTC100)'
+        required: true
+        type: string
+      test_env_file:
+        description: 'Test environment file to use'
+        required: true
+        type: string
+      execution_mode:
+        description: 'Execution mode'
+        required: true
+        type: string
+      timeout_minutes:
+        description: 'Timeout in minutes for the test'
+        required: false
+        type: number
+        default: 180
+    outputs:
+      test_result:
+        description: 'Test result (PASS/FAIL/TIMEOUT)'
+        value: ${{ jobs.run-ftc-test.outputs.test_result }}
+      test_duration:
+        description: 'Test execution duration'
+        value: ${{ jobs.run-ftc-test.outputs.test_duration }}
+
+jobs:
+  run-ftc-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      test_result: ${{ steps.test-execution.outputs.test_result }}
+      test_duration: ${{ steps.test-execution.outputs.test_duration }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          curl \
+          jq \
+          netcat-openbsd \
+          uuid-runtime \
+          bc \
+          python3-pip \
+          python3-venv
+
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install requests pyyaml
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install Docker Compose v2
+      run: |
+        # Remove any existing docker-compose
+        sudo rm -f /usr/local/bin/docker-compose
+        
+        # Install Docker Compose v2.29.7 (latest v2.x)
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        
+        # Verify version
+        docker-compose --version
+        
+        # Ensure it's v2.x
+        if ! docker-compose --version | grep -q "v2\."; then
+          echo "ERROR: Docker Compose v2.x is required but $(docker-compose --version) is installed"
+          exit 1
+        fi
+
+    - name: Clean up Docker environment for isolation
+      run: |
+        # Aggressive cleanup to ensure complete isolation
+        docker ps -aq | xargs -r docker rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm || true
+        docker system prune -af --volumes || true
+        
+        # Clean up any leftover mounted directories with permission issues
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/simulator-group/*/*.log 2>/dev/null || true
+        
+        # Reset Docker daemon to clean state
+        sudo systemctl restart docker
+        sleep 10
+
+    - name: Create logs directory and fix permissions
+      run: |
+        mkdir -p ${{ github.workspace }}/test/auto-test/logs/${{ inputs.test_case }}
+        
+        # Ensure proper permissions for simulator directories
+        sudo chown -R $USER:$USER test/simulator-group/ || true
+        sudo chmod -R 755 test/simulator-group/ || true
+        
+        # Create mnt directories that the test framework expects to exist
+        find test/simulator-group -maxdepth 1 -type d -name "*" -exec mkdir -p {}/mnt \; 2>/dev/null || true
+        chmod -R 777 test/simulator-group/*/mnt 2>/dev/null || true
+        
+        # Create tmp directories for test framework
+        mkdir -p test/auto-test/tmp
+        mkdir -p test/common/tmp
+        chmod -R 777 test/auto-test/tmp test/common/tmp
+
+    - name: Set up test environment variables
+      run: |
+        # Create unique identifiers for this test instance
+        TEST_INSTANCE_ID="${{ inputs.test_case }}-$(date +%s)-$$"
+        echo "TEST_CASE=${{ inputs.test_case }}" >> $GITHUB_ENV
+        echo "TEST_INSTANCE_ID=${TEST_INSTANCE_ID}" >> $GITHUB_ENV
+        echo "EXECUTION_MODE=${{ inputs.execution_mode }}" >> $GITHUB_ENV
+        echo "TEST_ENV_FILE=${{ inputs.test_env_file }}" >> $GITHUB_ENV
+        echo "WORKSPACE_PATH=${{ github.workspace }}" >> $GITHUB_ENV
+        
+        # Set unique container prefix to avoid conflicts
+        echo "CONTAINER_PREFIX=gh-${{ inputs.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)" >> $GITHUB_ENV
+
+    - name: Run FTC Test
+      id: test-execution
+      working-directory: test/auto-test
+      run: |
+        # Set executable permissions
+        chmod +x ./${{ inputs.test_case }}.sh
+        chmod +x ../common/*.sh
+        
+        # Create unique container prefix for isolation
+        CONTAINER_PREFIX="gh-${{ inputs.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)"
+        export RICSIM_PREFIX="${CONTAINER_PREFIX}"
+        export DOCKER_COMPOSE_PROJECT_NAME="${CONTAINER_PREFIX}"
+        
+        # Record start time
+        START_TIME=$(date +%s)
+        
+        # Run the test and capture exit code
+        set +e  # Don't exit on error, we want to handle it
+        timeout ${{ inputs.timeout_minutes }}m ./${{ inputs.test_case }}.sh ${{ inputs.execution_mode }} --env-file ${{ inputs.test_env_file }} --print-stats --gen-stats --endpoint-stats 2>&1 | tee test_output.log
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e  # Re-enable exit on error
+        
+        # Calculate duration
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "test_duration=$((DURATION / 60))m $((DURATION % 60))s" >> $GITHUB_OUTPUT
+        
+        # Check FTC framework result file as well
+        FTC_RESULT_FILE=".result${{ inputs.test_case }}.txt"
+        if [ -f "$FTC_RESULT_FILE" ]; then
+          FTC_RESULT=$(cat "$FTC_RESULT_FILE")
+          echo "FTC result file content: $FTC_RESULT"
+        fi
+        
+        # Determine test result and set environment variable
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+          # Double-check with FTC result file if it exists
+          if [ -f "$FTC_RESULT_FILE" ] && [ "$FTC_RESULT" != "0" ]; then
+            echo "test_result=FAIL" >> $GITHUB_OUTPUT
+            echo "❌ Test ${{ inputs.test_case }} FAILED (exit code 0 but FTC result: $FTC_RESULT)"
+            exit 1
+          else
+            echo "test_result=PASS" >> $GITHUB_OUTPUT
+            echo "✅ Test ${{ inputs.test_case }} PASSED"
+          fi
+        elif [ $TEST_EXIT_CODE -eq 124 ]; then
+          echo "test_result=TIMEOUT" >> $GITHUB_OUTPUT
+          echo "⏰ Test ${{ inputs.test_case }} TIMED OUT after ${{ inputs.timeout_minutes }} minutes"
+          exit 1
+        else
+          echo "test_result=FAIL" >> $GITHUB_OUTPUT
+          echo "❌ Test ${{ inputs.test_case }} FAILED with exit code $TEST_EXIT_CODE"
+          exit 1
+        fi
+
+    - name: Collect test artifacts
+      if: always()
+      run: |
+        # Create artifact directory
+        mkdir -p ${{ github.workspace }}/artifacts/${{ inputs.test_case }}
+        
+        # Copy logs if they exist
+        if [ -d "test/auto-test/logs/${{ inputs.test_case }}" ]; then
+          cp -r test/auto-test/logs/${{ inputs.test_case }}/* ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/ || true
+        fi
+        
+        # Copy test output
+        if [ -f "test/auto-test/test_output.log" ]; then
+          cp test/auto-test/test_output.log ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/ || true
+        fi
+        
+        # Copy result files
+        if [ -f "test/auto-test/.result${{ inputs.test_case }}.txt" ]; then
+          cp test/auto-test/.result${{ inputs.test_case }}.txt ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/ || true
+        fi
+        
+        # Create summary file
+        echo "Test Case: ${{ inputs.test_case }}" > ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Result: ${{ steps.test-execution.outputs.test_result || 'UNKNOWN' }}" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Duration: ${{ steps.test-execution.outputs.test_duration || 'Unknown' }}" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Execution Mode: ${{ inputs.execution_mode }}" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Environment File: ${{ inputs.test_env_file }}" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Timeout: ${{ inputs.timeout_minutes }} minutes" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+        echo "Timestamp: $(date)" >> ${{ github.workspace }}/artifacts/${{ inputs.test_case }}/summary.txt
+
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ftc-results-${{ inputs.test_case }}
+        path: artifacts/${{ inputs.test_case }}/
+        retention-days: 30
+
+    - name: Clean up Docker after test
+      if: always()
+      run: |
+        # Comprehensive cleanup
+        docker ps -aq | xargs -r docker stop -t 10 || true
+        docker ps -aq | xargs -r docker rm -f || true
+        docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker system prune -af --volumes || true
+        
+        # Clean up mounted directories that may have permission issues
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/auto-test/logs/*/*.log 2>/dev/null || true
