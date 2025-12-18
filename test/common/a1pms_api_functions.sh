@@ -339,7 +339,7 @@ start_a1pms() {
     if [ -d db ]; then
       if [ "$(ls -A $DIR)" ]; then
         echo -e $BOLD" Cleaning files in mounted dir: $PWD/db"$EBOLD
-        rm -rf db/* &>/dev/null
+        sudo rm -rf db/* &>/dev/null
         if [ $? -ne 0 ]; then
           echo -e $RED" Cannot remove database files in: $PWD"$ERED
           exit 1
