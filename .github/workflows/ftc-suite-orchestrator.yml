@@ -1,0 +1,167 @@
+name: FTC Suite-policy-all Orchestrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_env_file:
+        description: 'Test environment file to use'
+        required: true
+        default: '../common/test_env-oran-m-release.sh'
+        type: choice
+        options:
+          - '../common/test_env-oran-m-release.sh'
+          - '../common/test_env-oran-l-release.sh'
+          - '../common/test_env-oran-k-release.sh'
+          - '../common/test_env-onap-paris.sh'
+          - '../common/test_env-onap-oslo.sh'
+          - '../common/test_env-onap-montreal.sh'
+          - '../common/test_env-onap-newdelhi.sh'
+      execution_mode:
+        description: 'Execution mode'
+        required: true
+        default: 'remote docker'
+        type: choice
+        options:
+          - 'remote docker'
+          - 'remote-remove docker'
+      test_selection:
+        description: 'Which tests to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - 'standard-only'
+          - 'long-running-only'
+
+jobs:
+  # Standard tests (shorter duration)
+  standard-tests:
+    if: ${{ inputs.test_selection == 'all' || inputs.test_selection == 'standard-only' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 8  # Run standard tests in parallel
+      matrix:
+        workflow: [
+          'ftc-001.yml',
+          'ftc-010.yml', 
+          'ftc-110.yml',
+          'ftc-150.yml',
+          'ftc-300.yml',
+          'ftc-310.yml',
+          'ftc-350.yml',
+          'ftc-850.yml'
+        ]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Trigger FTC Test Workflow
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const workflow = '${{ matrix.workflow }}';
+          const testName = workflow.replace('.yml', '').replace('ftc-', 'FTC');
+          
+          console.log(`Triggering ${workflow} for test ${testName}`);
+          
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: workflow,
+            ref: context.ref,
+            inputs: {
+              test_env_file: '${{ inputs.test_env_file }}',
+              execution_mode: '${{ inputs.execution_mode }}'
+            }
+          });
+          
+          console.log(`Successfully triggered ${workflow}`);
+
+  # Long-running tests (run separately to avoid timeout issues)
+  long-running-tests:
+    if: ${{ inputs.test_selection == 'all' || inputs.test_selection == 'long-running-only' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2  # Limit long-running tests
+      matrix:
+        workflow: [
+          'ftc-100.yml',
+          'ftc-800.yml'
+        ]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Trigger Long-Running FTC Test Workflow
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const workflow = '${{ matrix.workflow }}';
+          const testName = workflow.replace('.yml', '').replace('ftc-', 'FTC');
+          
+          console.log(`Triggering ${workflow} for long-running test ${testName}`);
+          
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: workflow,
+            ref: context.ref,
+            inputs: {
+              test_env_file: '${{ inputs.test_env_file }}',
+              execution_mode: '${{ inputs.execution_mode }}'
+            }
+          });
+          
+          console.log(`Successfully triggered ${workflow}`);
+
+  # Summary job (runs after triggering all workflows)
+  orchestrator-summary:
+    needs: [standard-tests, long-running-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Generate Orchestrator Summary
+      run: |
+        echo "# FTC Suite-policy-all Orchestrator Summary" > orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "**Execution Details:**" >> orchestrator_summary.md
+        echo "- Environment File: ${{ inputs.test_env_file }}" >> orchestrator_summary.md
+        echo "- Execution Mode: ${{ inputs.execution_mode }}" >> orchestrator_summary.md
+        echo "- Test Selection: ${{ inputs.test_selection }}" >> orchestrator_summary.md
+        echo "- Timestamp: $(date)" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "## Triggered Workflows" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        
+        if [ "${{ inputs.test_selection }}" == "all" ] || [ "${{ inputs.test_selection }}" == "standard-only" ]; then
+          echo "### Standard Tests (Triggered)" >> orchestrator_summary.md
+          echo "- FTC1 - Basic Sanity Test" >> orchestrator_summary.md
+          echo "- FTC10 - Basic API Test" >> orchestrator_summary.md
+          echo "- FTC110 - Basic API Test" >> orchestrator_summary.md
+          echo "- FTC150 - Basic Config Test" >> orchestrator_summary.md
+          echo "- FTC300 - Config Changes" >> orchestrator_summary.md
+          echo "- FTC310 - Config Sync" >> orchestrator_summary.md
+          echo "- FTC350 - Config Test" >> orchestrator_summary.md
+          echo "- FTC850 - Stability Test" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        if [ "${{ inputs.test_selection }}" == "all" ] || [ "${{ inputs.test_selection }}" == "long-running-only" ]; then
+          echo "### Long-Running Tests (Triggered)" >> orchestrator_summary.md
+          echo "- FTC100 - Full API Walkthrough" >> orchestrator_summary.md
+          echo "- FTC800 - Basic Stability" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        echo "## Next Steps" >> orchestrator_summary.md
+        echo "1. Monitor individual workflow runs in the Actions tab" >> orchestrator_summary.md
+        echo "2. Each test runs on its own isolated runner instance" >> orchestrator_summary.md
+        echo "3. Check individual workflow results for detailed logs and artifacts" >> orchestrator_summary.md
+        echo "4. All tests run in parallel for maximum efficiency" >> orchestrator_summary.md
+        
+        cat orchestrator_summary.md
+
+    - name: Upload Orchestrator Summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: orchestrator-summary
+        path: orchestrator_summary.md
