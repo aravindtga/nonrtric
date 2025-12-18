@@ -125,14 +125,38 @@ jobs:
         export RICSIM_PREFIX="${CONTAINER_PREFIX}"
         export DOCKER_COMPOSE_PROJECT_NAME="${CONTAINER_PREFIX}"
         
+        # Run the test and capture exit code
+        set +e  # Don't exit on error, we want to handle it
         timeout 2h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --ricsim-prefix "${CONTAINER_PREFIX}" --print-stats --gen-stats 2>&1 | tee test_output.log
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e  # Re-enable exit on error
         
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-          echo "TEST_RESULT=PASS" >> $GITHUB_ENV
-        elif [ ${PIPESTATUS[0]} -eq 124 ]; then
+        # Check FTC framework result file as well
+        FTC_RESULT_FILE=".result${{ matrix.test_case }}.txt"
+        if [ -f "$FTC_RESULT_FILE" ]; then
+          FTC_RESULT=$(cat "$FTC_RESULT_FILE")
+          echo "FTC result file content: $FTC_RESULT"
+        fi
+        
+        # Determine test result and set environment variable
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+          # Double-check with FTC result file if it exists
+          if [ -f "$FTC_RESULT_FILE" ] && [ "$FTC_RESULT" != "0" ]; then
+            echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
+            echo "❌ Test ${{ matrix.test_case }} FAILED (exit code 0 but FTC result: $FTC_RESULT)"
+            exit 1
+          else
+            echo "TEST_RESULT=PASS" >> $GITHUB_ENV
+            echo "✅ Test ${{ matrix.test_case }} PASSED"
+          fi
+        elif [ $TEST_EXIT_CODE -eq 124 ]; then
           echo "TEST_RESULT=TIMEOUT" >> $GITHUB_ENV
+          echo "⏰ Test ${{ matrix.test_case }} TIMED OUT"
+          exit 1  # Fail the workflow step
         else
           echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
+          echo "❌ Test ${{ matrix.test_case }} FAILED with exit code $TEST_EXIT_CODE"
+          exit 1  # Fail the workflow step
         fi
 
     - name: Collect test artifacts
