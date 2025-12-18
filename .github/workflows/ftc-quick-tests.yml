@@ -121,6 +121,10 @@ jobs:
         # Ensure proper permissions for simulator directories
         sudo chown -R $USER:$USER test/simulator-group/ || true
         sudo chmod -R 755 test/simulator-group/ || true
+        
+        # Create mnt directories that the test framework expects to exist
+        find test/simulator-group -maxdepth 1 -type d -name "*" -exec mkdir -p {}/mnt \; 2>/dev/null || true
+        chmod -R 777 test/simulator-group/*/mnt 2>/dev/null || true
 
     - name: Run FTC Test - ${{ matrix.test_case }}
       working-directory: test/auto-test
