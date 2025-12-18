@@ -1,0 +1,361 @@
+name: FTC Suite-policy-all Tests (Long Running)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_env_file:
+        description: 'Test environment file to use'
+        required: true
+        default: '../common/test_env-oran-m-release.sh'
+        type: choice
+        options:
+          - '../common/test_env-oran-m-release.sh'
+          - '../common/test_env-oran-l-release.sh'
+          - '../common/test_env-oran-k-release.sh'
+          - '../common/test_env-onap-paris.sh'
+          - '../common/test_env-onap-oslo.sh'
+          - '../common/test_env-onap-montreal.sh'
+          - '../common/test_env-onap-newdelhi.sh'
+      execution_mode:
+        description: 'Execution mode'
+        required: true
+        default: 'remote docker'
+        type: choice
+        options:
+          - 'remote docker'
+          - 'remote-remove docker'
+      selected_tests:
+        description: 'Select specific long-running tests to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - 'capacity-only'
+          - 'stability-only'
+          - 'custom'
+
+jobs:
+  # Long-running tests - may take 4-8+ hours
+  ftc-long-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 600  # 10 hours timeout
+    strategy:
+      fail-fast: false
+      max-parallel: 2  # Each test runs on separate runner instance for Docker isolation
+      matrix:
+        test_case: [
+          'FTC100',         # Full API walkthrough - long running (from Suite-policy-all.sh)
+          'FTC800'          # Basic stability - long running (from Suite-policy-all.sh)
+        ]
+        exclude:
+          # Conditional exclusions based on input
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC100' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC1800' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC3000' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC3001' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC4000' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC1_A1PMS_ADAPTER' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC1_MEDIATOR_ADAPTER' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC1_RICMEDIATOR' || 'never' }}
+          - test_case: ${{ github.event.inputs.selected_tests == 'capacity-only' && 'FTC1_RICMEDIATORONLY' || 'never' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          curl \
+          jq \
+          netcat-openbsd \
+          uuid-runtime \
+          bc \
+          python3-pip \
+          python3-venv \
+          htop \
+          iotop
+
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install requests pyyaml
+
+    - name: Set up Docker with more resources
+      uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: |
+          image=moby/buildkit:latest
+          network=host
+
+    - name: Install Docker Compose v2
+      run: |
+        # Remove any existing docker-compose
+        sudo rm -f /usr/local/bin/docker-compose
+        
+        # Install Docker Compose v2.29.7 (latest v2.x)
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        
+        # Verify version
+        docker-compose --version
+        
+        # Ensure it's v2.x
+        if ! docker-compose --version | grep -q "v2\."; then
+          echo "ERROR: Docker Compose v2.x is required but $(docker-compose --version) is installed"
+          exit 1
+        fi
+
+    - name: Configure Docker for long-running tests
+      run: |
+        # Increase Docker resources and timeouts
+        sudo systemctl stop docker
+        echo '{"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}, "default-ulimits": {"nofile": {"Name": "nofile", "Hard": 64000, "Soft": 64000}}}' | sudo tee /etc/docker/daemon.json
+        sudo systemctl start docker
+        
+        # Clean up thoroughly for complete isolation
+        docker ps -aq | xargs -r docker rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm || true
+        docker system prune -af --volumes || true
+        
+        # Clean up any leftover mounted directories with permission issues
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/simulator-group/*/*.log 2>/dev/null || true
+        
+        # Reset Docker daemon
+        sudo systemctl restart docker
+        sleep 15
+
+    - name: Monitor system resources
+      run: |
+        echo "=== System Resources Before Test ==="
+        free -h
+        df -h
+        docker system df
+
+    - name: Create logs directory and fix permissions
+      run: |
+        mkdir -p ${{ github.workspace }}/test/auto-test/logs/${{ matrix.test_case }}
+        
+        # Ensure proper permissions for simulator directories
+        sudo chown -R $USER:$USER test/simulator-group/ || true
+        sudo chmod -R 755 test/simulator-group/ || true
+        
+        # Create mnt directories that the test framework expects to exist
+        find test/simulator-group -maxdepth 1 -type d -name "*" -exec mkdir -p {}/mnt \; 2>/dev/null || true
+        chmod -R 777 test/simulator-group/*/mnt 2>/dev/null || true
+
+    - name: Run Long FTC Test - ${{ matrix.test_case }}
+      working-directory: test/auto-test
+      run: |
+        chmod +x ./${{ matrix.test_case }}.sh
+        chmod +x ../common/*.sh
+        
+        # Create unique container prefix for isolation
+        CONTAINER_PREFIX="gh-long-${{ matrix.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)"
+        export RICSIM_PREFIX="${CONTAINER_PREFIX}"
+        export DOCKER_COMPOSE_PROJECT_NAME="${CONTAINER_PREFIX}"
+        
+        # Start resource monitoring in background
+        (while true; do
+          echo "$(date): Memory: $(free -m | grep Mem | awk '{print $3"/"$2" MB"}'), Disk: $(df -h / | tail -1 | awk '{print $3"/"$2" ("$5")"}')"
+          sleep 300  # Every 5 minutes
+        done) > resource_monitor.log &
+        MONITOR_PID=$!
+        
+        # Run the test and capture exit code
+        set +e  # Don't exit on error, we want to handle it
+        timeout 9h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --print-stats --gen-stats --endpoint-stats 2>&1 | tee test_output.log
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e  # Re-enable exit on error
+        
+        # Stop monitoring
+        kill $MONITOR_PID || true
+        
+        # Check FTC framework result file as well
+        FTC_RESULT_FILE=".result${{ matrix.test_case }}.txt"
+        if [ -f "$FTC_RESULT_FILE" ]; then
+          FTC_RESULT=$(cat "$FTC_RESULT_FILE")
+          echo "FTC result file content: $FTC_RESULT"
+        fi
+        
+        # Determine test result and set environment variable
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+          # Double-check with FTC result file if it exists
+          if [ -f "$FTC_RESULT_FILE" ] && [ "$FTC_RESULT" != "0" ]; then
+            echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
+            echo "❌ Test ${{ matrix.test_case }} FAILED (exit code 0 but FTC result: $FTC_RESULT)"
+            exit 1
+          else
+            echo "TEST_RESULT=PASS" >> $GITHUB_ENV
+            echo "✅ Test ${{ matrix.test_case }} PASSED"
+          fi
+        elif [ $TEST_EXIT_CODE -eq 124 ]; then
+          echo "TEST_RESULT=TIMEOUT" >> $GITHUB_ENV
+          echo "⏰ Test ${{ matrix.test_case }} TIMED OUT after 9 hours"
+          exit 1  # Fail the workflow step
+        else
+          echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
+          echo "❌ Test ${{ matrix.test_case }} FAILED with exit code $TEST_EXIT_CODE"
+          exit 1  # Fail the workflow step
+        fi
+
+    - name: Monitor system resources after test
+      if: always()
+      run: |
+        echo "=== System Resources After Test ==="
+        free -h
+        df -h
+        docker system df
+        docker ps -a
+
+    - name: Collect test artifacts
+      if: always()
+      run: |
+        mkdir -p ${{ github.workspace }}/artifacts/${{ matrix.test_case }}
+        
+        # Copy all logs
+        if [ -d "test/auto-test/logs/${{ matrix.test_case }}" ]; then
+          cp -r test/auto-test/logs/${{ matrix.test_case }}/* ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        # Copy test output and resource monitoring
+        if [ -f "test/auto-test/test_output.log" ]; then
+          cp test/auto-test/test_output.log ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        if [ -f "test/auto-test/resource_monitor.log" ]; then
+          cp test/auto-test/resource_monitor.log ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        # Copy result files
+        if [ -f "test/auto-test/.result${{ matrix.test_case }}.txt" ]; then
+          cp test/auto-test/.result${{ matrix.test_case }}.txt ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        # Create detailed summary
+        echo "Test Case: ${{ matrix.test_case }}" > ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Result: ${TEST_RESULT:-UNKNOWN}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Execution Mode: ${{ github.event.inputs.execution_mode }}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Environment File: ${{ github.event.inputs.test_env_file }}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Test Type: Long Running" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Timestamp: $(date)" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        
+        # Add resource usage summary if available
+        if [ -f "test/auto-test/resource_monitor.log" ]; then
+          echo "Resource Usage:" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+          tail -5 test/auto-test/resource_monitor.log >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        fi
+
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ftc-long-results-${{ matrix.test_case }}
+        path: artifacts/${{ matrix.test_case }}/
+        retention-days: 45  # Keep longer for long-running tests
+
+    - name: Aggressive cleanup after long test
+      if: always()
+      run: |
+        # More aggressive cleanup for long-running tests
+        docker ps -aq | xargs -r docker rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker network ls --filter name=nonrtric -q | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm || true
+        docker system prune -af --volumes || true
+        
+        # Clean up mounted directories that may have permission issues
+        sudo rm -rf test/simulator-group/*/mnt 2>/dev/null || true
+        sudo rm -f test/auto-test/logs/*/*.log 2>/dev/null || true
+        
+        # Clear logs to free space
+        sudo journalctl --vacuum-time=1h || true
+
+  test-summary:
+    needs: ftc-long-tests
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-results
+
+    - name: Generate detailed test summary
+      run: |
+        echo "# FTC Long Running Test Results Summary" > test_summary.md
+        echo "" >> test_summary.md
+        echo "**Execution Details:**" >> test_summary.md
+        echo "- Environment File: ${{ github.event.inputs.test_env_file }}" >> test_summary.md
+        echo "- Execution Mode: ${{ github.event.inputs.execution_mode }}" >> test_summary.md
+        echo "- Selected Tests: ${{ github.event.inputs.selected_tests }}" >> test_summary.md
+        echo "- Timestamp: $(date)" >> test_summary.md
+        echo "" >> test_summary.md
+        echo "| Test Case | Result | Type | Logs |" >> test_summary.md
+        echo "|-----------|--------|------|------|" >> test_summary.md
+        
+        total_tests=0
+        passed_tests=0
+        failed_tests=0
+        timeout_tests=0
+        
+        for dir in all-results/ftc-long-results-*/; do
+          if [ -d "$dir" ]; then
+            test_name=$(basename "$dir" | sed 's/ftc-long-results-//')
+            total_tests=$((total_tests + 1))
+            
+            # Determine test type
+            case "$test_name" in
+              "FTC1100") test_type="Capacity" ;;
+              "FTC100"|"FTC1800") test_type="Stability" ;;
+              "FTC3000"|"FTC3001") test_type="rApp" ;;
+              "FTC4000") test_type="Helm Manager" ;;
+              *"ADAPTER"*|*"MEDIATOR"*) test_type="Adapter" ;;
+              *) test_type="Long Running" ;;
+            esac
+            
+            if [ -f "$dir/summary.txt" ]; then
+              result=$(grep "Result:" "$dir/summary.txt" | cut -d' ' -f2)
+              case "$result" in
+                "PASS") passed_tests=$((passed_tests + 1)) ;;
+                "FAIL") failed_tests=$((failed_tests + 1)) ;;
+                "TIMEOUT") timeout_tests=$((timeout_tests + 1)) ;;
+              esac
+              echo "| $test_name | $result | $test_type | [View Logs](all-results/ftc-long-results-$test_name/) |" >> test_summary.md
+            else
+              echo "| $test_name | UNKNOWN | $test_type | [View Logs](all-results/ftc-long-results-$test_name/) |" >> test_summary.md
+            fi
+          fi
+        done
+        
+        echo "" >> test_summary.md
+        echo "**Summary Statistics:**" >> test_summary.md
+        echo "- Total Tests: $total_tests" >> test_summary.md
+        echo "- Passed: $passed_tests" >> test_summary.md
+        echo "- Failed: $failed_tests" >> test_summary.md
+        echo "- Timeout: $timeout_tests" >> test_summary.md
+        if [ $total_tests -gt 0 ]; then
+          echo "- Success Rate: $(( passed_tests * 100 / total_tests ))%" >> test_summary.md
+        fi
+        
+        echo "" >> test_summary.md
+        echo "**Notes:**" >> test_summary.md
+        echo "- Long-running tests may take 4-10 hours to complete" >> test_summary.md
+        echo "- Timeout tests may indicate resource constraints or test environment issues" >> test_summary.md
+        echo "- Check individual test logs for detailed failure analysis" >> test_summary.md
+
+    - name: Upload summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: long-test-summary
+        path: test_summary.md
