@@ -1,11 +1,19 @@
-name: FTC Suite-policy-all Orchestrator
+name: FTC Suite Orchestrator
 
 on:
   workflow_dispatch:
     inputs:
-      test_env_file:
-        description: 'Test environment file to use'
+      action:
+        description: 'Action to perform'
         required: true
+        default: 'summary'
+        type: choice
+        options:
+          - 'trigger-all'
+          - 'summary'
+      test_env_file:
+        description: 'Test environment file to use (for trigger-all)'
+        required: false
         default: '../common/test_env-oran-m-release.sh'
         type: choice
         options:
@@ -17,15 +25,15 @@ on:
           - '../common/test_env-onap-montreal.sh'
           - '../common/test_env-onap-newdelhi.sh'
       execution_mode:
-        description: 'Execution mode'
-        required: true
+        description: 'Execution mode (for trigger-all)'
+        required: false
         default: 'remote docker'
         type: choice
         options:
           - 'remote docker'
           - 'remote-remove docker'
       test_selection:
-        description: 'Which tests to run'
+        description: 'Which tests to run/summarize'
         required: true
         default: 'all'
         type: choice
@@ -33,135 +41,439 @@ on:
           - 'all'
           - 'standard-only'
           - 'long-running-only'
+      summary_timeframe:
+        description: 'Time range to look for FTC test results (for summary)'
+        required: false
+        default: '3h'
+        type: choice
+        options:
+          - '1h'
+          - '3h'
+          - '6h'
+          - '12h'
+          - '24h'
+          - '48h'
+          - '7d'
 
 jobs:
-  # Standard tests (shorter duration)
-  standard-tests:
-    if: ${{ inputs.test_selection == 'all' || inputs.test_selection == 'standard-only' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 8  # Run standard tests in parallel
-      matrix:
-        workflow: [
-          'ftc-001.yml',
-          'ftc-010.yml', 
-          'ftc-110.yml',
-          'ftc-150.yml',
-          'ftc-300.yml',
-          'ftc-310.yml',
-          'ftc-350.yml',
-          'ftc-850.yml'
-        ]
+  trigger-all-tests:
+    if: ${{ inputs.action == 'trigger-all' }}
     runs-on: ubuntu-latest
     steps:
-    - name: Trigger FTC Test Workflow
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const workflow = '${{ matrix.workflow }}';
-          const testName = workflow.replace('.yml', '').replace('ftc-', 'FTC');
-          
-          console.log(`Triggering ${workflow} for test ${testName}`);
-          
-          const response = await github.rest.actions.createWorkflowDispatch({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            workflow_id: workflow,
-            ref: context.ref,
-            inputs: {
-              test_env_file: '${{ inputs.test_env_file }}',
-              execution_mode: '${{ inputs.execution_mode }}'
-            }
-          });
-          
-          console.log(`Successfully triggered ${workflow}`);
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-  # Long-running tests (run separately to avoid timeout issues)
-  long-running-tests:
-    if: ${{ inputs.test_selection == 'all' || inputs.test_selection == 'long-running-only' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 2  # Limit long-running tests
-      matrix:
-        workflow: [
-          'ftc-100.yml',
-          'ftc-800.yml'
-        ]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Trigger Long-Running FTC Test Workflow
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        script: |
-          const workflow = '${{ matrix.workflow }}';
-          const testName = workflow.replace('.yml', '').replace('ftc-', 'FTC');
-          
-          console.log(`Triggering ${workflow} for long-running test ${testName}`);
-          
-          const response = await github.rest.actions.createWorkflowDispatch({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            workflow_id: workflow,
-            ref: context.ref,
-            inputs: {
-              test_env_file: '${{ inputs.test_env_file }}',
-              execution_mode: '${{ inputs.execution_mode }}'
-            }
-          });
-          
-          console.log(`Successfully triggered ${workflow}`);
-
-  # Summary job (runs after triggering all workflows)
-  orchestrator-summary:
-    needs: [standard-tests, long-running-tests]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-    - name: Generate Orchestrator Summary
+    - name: Trigger All FTC Workflows
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "# FTC Suite-policy-all Orchestrator Summary" > orchestrator_summary.md
-        echo "" >> orchestrator_summary.md
-        echo "**Execution Details:**" >> orchestrator_summary.md
-        echo "- Environment File: ${{ inputs.test_env_file }}" >> orchestrator_summary.md
-        echo "- Execution Mode: ${{ inputs.execution_mode }}" >> orchestrator_summary.md
-        echo "- Test Selection: ${{ inputs.test_selection }}" >> orchestrator_summary.md
-        echo "- Timestamp: $(date)" >> orchestrator_summary.md
-        echo "" >> orchestrator_summary.md
-        echo "## Triggered Workflows" >> orchestrator_summary.md
-        echo "" >> orchestrator_summary.md
+        # Define all FTC tests from Suite-policy-all.sh
+        declare -A FTC_WORKFLOWS
+        FTC_WORKFLOWS["FTC1"]="ftc-001.yml"
+        FTC_WORKFLOWS["FTC10"]="ftc-010.yml"
+        FTC_WORKFLOWS["FTC100"]="ftc-100.yml"
+        FTC_WORKFLOWS["FTC110"]="ftc-110.yml"
+        FTC_WORKFLOWS["FTC150"]="ftc-150.yml"
+        FTC_WORKFLOWS["FTC300"]="ftc-300.yml"
+        FTC_WORKFLOWS["FTC310"]="ftc-310.yml"
+        FTC_WORKFLOWS["FTC350"]="ftc-350.yml"
+        FTC_WORKFLOWS["FTC800"]="ftc-800.yml"
+        FTC_WORKFLOWS["FTC850"]="ftc-850.yml"
         
-        if [ "${{ inputs.test_selection }}" == "all" ] || [ "${{ inputs.test_selection }}" == "standard-only" ]; then
-          echo "### Standard Tests (Triggered)" >> orchestrator_summary.md
-          echo "- FTC1 - Basic Sanity Test" >> orchestrator_summary.md
-          echo "- FTC10 - Basic API Test" >> orchestrator_summary.md
-          echo "- FTC110 - Basic API Test" >> orchestrator_summary.md
-          echo "- FTC150 - Basic Config Test" >> orchestrator_summary.md
-          echo "- FTC300 - Config Changes" >> orchestrator_summary.md
-          echo "- FTC310 - Config Sync" >> orchestrator_summary.md
-          echo "- FTC350 - Config Test" >> orchestrator_summary.md
-          echo "- FTC850 - Stability Test" >> orchestrator_summary.md
-          echo "" >> orchestrator_summary.md
+        # Define test categories
+        STANDARD_TESTS="FTC1 FTC10 FTC110 FTC150 FTC300 FTC310 FTC350 FTC850"
+        LONG_RUNNING_TESTS="FTC100 FTC800"
+        
+        # Determine which tests to run
+        TESTS_TO_RUN=""
+        if [ "${{ inputs.test_selection }}" == "all" ]; then
+          TESTS_TO_RUN="$STANDARD_TESTS $LONG_RUNNING_TESTS"
+        elif [ "${{ inputs.test_selection }}" == "standard-only" ]; then
+          TESTS_TO_RUN="$STANDARD_TESTS"
+        elif [ "${{ inputs.test_selection }}" == "long-running-only" ]; then
+          TESTS_TO_RUN="$LONG_RUNNING_TESTS"
         fi
         
-        if [ "${{ inputs.test_selection }}" == "all" ] || [ "${{ inputs.test_selection }}" == "long-running-only" ]; then
-          echo "### Long-Running Tests (Triggered)" >> orchestrator_summary.md
-          echo "- FTC100 - Full API Walkthrough" >> orchestrator_summary.md
-          echo "- FTC800 - Basic Stability" >> orchestrator_summary.md
-          echo "" >> orchestrator_summary.md
+        echo "🚀 Triggering FTC tests: $TESTS_TO_RUN"
+        echo "📋 Environment: ${{ inputs.test_env_file }}"
+        echo "⚙️ Execution Mode: ${{ inputs.execution_mode }}"
+        echo ""
+        
+        # Trigger workflows
+        TRIGGERED_COUNT=0
+        FAILED_COUNT=0
+        
+        for test in $TESTS_TO_RUN; dotest]}"
+          echo "Triggering $test using $workflow_file..."
+          
+          # Trigger the workflow
+          response=$(curl -s -w "%{http_code}" -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$workflow_file/dispatches" \
+            -d "{
+              \"ref\": \"${{ github.ref }}\",
+              \"inputs\": {
+                \"test_env_file\": \"${{ inputs.test_env_file }}\",
+                \"execution_mode\": \"${{ inputs.execution_mode }}\"
+              }
+            }")
+          
+          # Extract HTTP status code (last 3 characters)
+          http_code="${response: -3}"
+          
+          if [ "$http_code" == "204" ]; then
+            echo "✅ Successfully triggered $test"
+            TRIGGERED_COUNT=$((TRIGGERED_COUNT + 1))
+          else
+            echo "❌ Failed to trigger $test (HTTP $http_code)"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+          fi
+          
+          # Small delay between triggers to avoid rate limiting
+          sleep 2
+        done
+        
+        echo ""
+        echo "==================== TRIGGER SUMMARY ===================="
+        echo "✅ Successfully triggered: $TRIGGERED_COUNT workflows"
+        echo "❌ Failed to trigger: $FAILED_COUNT workflows"
+        echo "🔗 Check the Actions tab to monitor individual test progress"
+        echo ""
+        echo "💡 Next Steps:"
+        echo "1. Monitor individual FTC workflow runs in the Actions tab"
+        echo "2. After tests complete, run this orchestrator with action='summary'"
+        echo "3. Each test runs in complete Docker isolation on separate runners"
+        echo "=========================================================="
+        
+        if [ $FAILED_COUNT -gt 0 ]; then
+          echo "⚠️ Some workflows failed to trigger. Check GitHub token permissions."
+          exit 1
         fi
-        
-        echo "## Next Steps" >> orchestrator_summary.md
-        echo "1. Monitor individual workflow runs in the Actions tab" >> orchestrator_summary.md
-        echo "2. Each test runs on its own isolated runner instance" >> orchestrator_summary.md
-        echo "3. Check individual workflow results for detailed logs and artifacts" >> orchestrator_summary.md
-        echo "4. All tests run in parallel for maximum efficiency" >> orchestrator_summary.md
-        
-        cat orchestrator_summary.md
 
-    - name: Upload Orchestrator Summary
+  collect-and-summarize:
+    if: ${{ inputs.action == 'summary' }}
+    runs-on: ubuntu-latest
+          workflow_file="${FTC_WORKFL
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Collect FTC Test Results
+      id: collect-results
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Define all FTC tests from Suite-policy-all.sh
+        declare -A FTC_WORKFLOWS
+        FTC_WORKFLOWS["FTC1"]="FTC1 - Basic Sanity Test"
+        FTC_WORKFLOWS["FTC10"]="FTC10 - Basic API Test"
+        FTC_WORKFLOWS["FTC100"]="FTC100 - Full API Walkthrough"
+        FTC_WORKFLOWS["FTC110"]="FTC110 - Basic API Test"
+        FTC_WORKFLOWS["FTC150"]="FTC150 - Basic Config Test"
+        FTC_WORKFLOWS["FTC300"]="FTC300 - Config Changes"
+        FTC_WORKFLOWS["FTC310"]="FTC310 - Config Sync"
+        FTC_WORKFLOWS["FTC350"]="FTC350 - Config Test"
+        FTC_WORKFLOWS["FTC800"]="FTC800 - Basic Stability"
+        FTC_WORKFLOWS["FTC850"]="FTC850 - Stability Test"
+        
+        # Define test categories
+        STANDARD_TESTS="FTC1 FTC10 FTC110 FTC150 FTC300 FTC310 FTC350 FTC850"
+        LONG_RUNNING_TESTS="FTC100 FTC800"
+        
+        # Determine which tests to include
+        TESTS_TO_INCLUDE=""
+        if [ "${{ inputs.test_selection }}" == "all" ]; then
+          TESTS_TO_INCLUDE="$STANDARD_TESTS $LONG_RUNNING_TESTS"
+        elif [ "${{ inputs.test_selection }}" == "standard-only" ]; then
+          TESTS_TO_INCLUDE="$STANDARD_TESTS"
+        elif [ "${{ inputs.test_selection }}" == "long-running-only" ]; then
+          TESTS_TO_INCLUDE="$LONG_RUNNING_TESTS"
+        fi
+        
+        echo "Looking for results from tests: $TESTS_TO_INCLUDE"
+        
+        # Convert timeframe to hours for API query
+        case "${{ inputs.summary_timeframe }}" in
+          "1h") HOURS_BACK=1 ;;
+          "6h") HOURS_BACK=6 ;;
+          "12h") HOURS_BACK=12 ;;
+          "24h") HOURS_BACK=24 ;;
+          "48h") HOURS_BACK=48 ;;
+          "7d") HOURS_BACK=168 ;;
+          *) HOURS_BACK=24 ;;
+        esac
+        
+        # Calculate cutoff time
+        CUTOFF_TIME=$(date -u -d "$HOURS_BACK hours ago" +"%Y-%m-%dT%H:%M:%SZ")
+        echo "Looking for workflow runs since: $CUTOFF_TIME"
+        
+        # Initialize result tracking
+        declare -A TEST_RESULTS
+        declare -A TEST_DURATIONS
+        declare -A TEST_RUN_IDS
+        declare -A TEST_TIMESTAMPS
+        
+        # Search for recent workflow runs for each FTC test
+        for test in $TESTS_TO_INCLUDE; do
+          workflow_name="${FTC_WORKFLOWS[$test]}"
+          echo "Searching for recent runs of: $workflow_name"
+          
+          # Get recent workflow runs
+          response=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=50&created=>$CUTOFF_TIME")
+          
+          # Find the most recent run for this workflow
+          if command -v jq >/dev/null 2>&1; then
+            # Use jq to parse and find matching workflow
+            matching_run=$(echo "$response" | jq -r --arg name "$workflow_name" '
+              .workflow_runs[] | 
+              select(.name == $name) | 
+              select(.status == "completed") |
+              . as $run |
+              "\($run.id)|\($run.conclusion)|\($run.created_at)|\($run.updated_at)|\($run.html_url)"
+            ' | head -1)
+            
+            if [ -n "$matching_run" ] && [ "$matching_run" != "null" ]; then
+              IFS='|' read -r run_id conclusion created_at updated_at html_url <<< "$matching_run"
+              
+              TEST_RESULTS[$test]="$conclusion"
+              TEST_RUN_IDS[$test]="$run_id"
+              TEST_TIMESTAMPS[$test]="$created_at"
+              
+              # Calculate duration
+              if [ -n "$created_at" ] && [ -n "$updated_at" ]; then
+                start_epoch=$(date -d "$created_at" +%s 2>/dev/null || echo "0")
+                end_epoch=$(date -d "$updated_at" +%s 2>/dev/null || echo "0")
+                if [ $start_epoch -gt 0 ] && [ $end_epoch -gt 0 ]; then
+                  duration_seconds=$((end_epoch - start_epoch))
+                  duration_minutes=$((duration_seconds / 60))
+                  TEST_DURATIONS[$test]="${duration_minutes}m"
+                else
+                  TEST_DURATIONS[$test]="unknown"
+                fi
+              else
+                TEST_DURATIONS[$test]="unknown"
+              fi
+              
+              echo "✅ Found result for $test: $conclusion (${TEST_DURATIONS[$test]})"
+            else
+              echo "⚠️ No recent completed runs found for $test"
+              TEST_RESULTS[$test]="not_found"
+              TEST_DURATIONS[$test]="N/A"
+            fi
+          else
+            echo "⚠️ jq not available, marking $test as unknown"
+            TEST_RESULTS[$test]="unknown"
+            TEST_DURATIONS[$test]="unknown"
+          fi
+        done
+        
+        # Create results summary for next step
+        RESULTS_JSON="{"
+        for test in $TESTS_TO_INCLUDE; do
+          result="${TEST_RESULTS[$test]:-not_found}"
+          duration="${TEST_DURATIONS[$test]:-unknown}"
+          run_id="${TEST_RUN_IDS[$test]:-}"
+          timestamp="${TEST_TIMESTAMPS[$test]:-}"
+          
+          if [ ${#RESULTS_JSON} -gt 1 ]; then
+            RESULTS_JSON="$RESULTS_JSON,"
+          fi
+          RESULTS_JSON="$RESULTS_JSON\"$test\":{\"result\":\"$result\",\"duration\":\"$duration\",\"run_id\":\"$run_id\",\"timestamp\":\"$timestamp\"}"
+        done
+        RESULTS_JSON="$RESULTS_JSON}"
+        
+        echo "results_json=$RESULTS_JSON" >> $GITHUB_OUTPUT
+        echo "Final collected results: $RESULTS_JSON"
+
+    - name: Generate Comprehensive Summary
+      run: |
+        # Parse results
+        RESULTS_JSON='${{ steps.collect-results.outputs.results_json }}'
+        echo "Processing results: $RESULTS_JSON"
+        
+        # Initialize counters
+        TOTAL_TESTS=0
+        PASSED_TESTS=0
+        FAILED_TESTS=0
+        TIMEOUT_TESTS=0
+        NOT_FOUND_TESTS=0
+        UNKNOWN_TESTS=0
+        
+        # Initialize result lists
+        PASSED_LIST=""
+        FAILED_LIST=""
+        TIMEOUT_LIST=""
+        NOT_FOUND_LIST=""
+        UNKNOWN_LIST=""
+        
+        # Process each test result
+        if command -v jq >/dev/null 2>&1; then
+          # Use jq for JSON parsing
+          for test in $(echo "$RESULTS_JSON" | jq -r 'keys[]'); do
+            TOTAL_TESTS=$((TOTAL_TESTS + 1))
+            
+            result=$(echo "$RESULTS_JSON" | jq -r ".[\"$test\"].result")
+            duration=$(echo "$RESULTS_JSON" | jq -r ".[\"$test\"].duration")
+            run_id=$(echo "$RESULTS_JSON" | jq -r ".[\"$test\"].run_id")
+            timestamp=$(echo "$RESULTS_JSON" | jq -r ".[\"$test\"].timestamp")
+            
+            # Format timestamp for display
+            if [ -n "$timestamp" ] && [ "$timestamp" != "null" ] && [ "$timestamp" != "" ]; then
+              display_time=$(date -d "$timestamp" "+%Y-%m-%d %H:%M UTC" 2>/dev/null || echo "$timestamp")
+            else
+              display_time="N/A"
+            fi
+            
+            # Create run link if we have run_id
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ] && [ "$run_id" != "" ]; then
+              run_link="[$test](${{ github.server_url }}/${{ github.repository }}/actions/runs/$run_id)"
+            else
+              run_link="$test"
+            fi
+            
+            case "$result" in
+              "success")
+                PASSED_TESTS=$((PASSED_TESTS + 1))
+                PASSED_LIST="$PASSED_LIST- $run_link ✅ ($duration) - $display_time\n"
+                ;;
+              "failure"|"cancelled")
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                FAILED_LIST="$FAILED_LIST- $run_link ❌ ($result, $duration) - $display_time\n"
+                ;;
+              "timed_out")
+                TIMEOUT_TESTS=$((TIMEOUT_TESTS + 1))
+                TIMEOUT_LIST="$TIMEOUT_LIST- $run_link ⏰ (timeout, $duration) - $display_time\n"
+                ;;
+              "not_found")
+                NOT_FOUND_TESTS=$((NOT_FOUND_TESTS + 1))
+                NOT_FOUND_LIST="$NOT_FOUND_LIST- $test ⚪ (no recent runs found)\n"
+                ;;
+              *)
+                UNKNOWN_TESTS=$((UNKNOWN_TESTS + 1))
+                UNKNOWN_LIST="$UNKNOWN_LIST- $test ❓ (unknown status: $result)\n"
+                ;;
+            esac
+          done
+        else
+          echo "⚠️ jq not available, cannot parse detailed results"
+          TOTAL_TESTS=10  # Default to all FTC tests
+          UNKNOWN_TESTS=$TOTAL_TESTS
+        fi
+        
+        # Determine overall status
+        if [ $NOT_FOUND_TESTS -eq $TOTAL_TESTS ]; then
+          OVERALL_STATUS="NO_RECENT_RUNS"
+          OVERALL_EMOJI="⚪"
+        elif [ $UNKNOWN_TESTS -gt 0 ] && [ $((PASSED_TESTS + FAILED_TESTS + TIMEOUT_TESTS)) -eq 0 ]; then
+          OVERALL_STATUS="UNKNOWN"
+          OVERALL_EMOJI="❓"
+        elif [ $FAILED_TESTS -gt 0 ] || [ $TIMEOUT_TESTS -gt 0 ]; then
+          OVERALL_STATUS="FAILED"
+          OVERALL_EMOJI="❌"
+        elif [ $PASSED_TESTS -eq $((TOTAL_TESTS - NOT_FOUND_TESTS - UNKNOWN_TESTS)) ] && [ $PASSED_TESTS -gt 0 ]; then
+          OVERALL_STATUS="PASSED"
+          OVERALL_EMOJI="✅"
+        else
+          OVERALL_STATUS="MIXED"
+          OVERALL_EMOJI="⚠️"
+        fi
+        
+        # Create comprehensive summary
+        echo "# $OVERALL_EMOJI FTC Suite Results Summary" > orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "**Overall Status: $OVERALL_STATUS**" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        
+        echo "## 📊 Test Results Summary" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "| Status | Count | Percentage |" >> orchestrator_summary.md
+        echo "|--------|-------|------------|" >> orchestrator_summary.md
+        echo "| ✅ Passed | $PASSED_TESTS | $(( TOTAL_TESTS > 0 ? PASSED_TESTS * 100 / TOTAL_TESTS : 0 ))% |" >> orchestrator_summary.md
+        echo "| ❌ Failed | $FAILED_TESTS | $(( TOTAL_TESTS > 0 ? FAILED_TESTS * 100 / TOTAL_TESTS : 0 ))% |" >> orchestrator_summary.md
+        echo "| ⏰ Timeout | $TIMEOUT_TESTS | $(( TOTAL_TESTS > 0 ? TIMEOUT_TESTS * 100 / TOTAL_TESTS : 0 ))% |" >> orchestrator_summary.md
+        echo "| ⚪ Not Found | $NOT_FOUND_TESTS | $(( TOTAL_TESTS > 0 ? NOT_FOUND_TESTS * 100 / TOTAL_TESTS : 0 ))% |" >> orchestrator_summary.md
+        echo "| ❓ Unknown | $UNKNOWN_TESTS | $(( TOTAL_TESTS > 0 ? UNKNOWN_TESTS * 100 / TOTAL_TESTS : 0 ))% |" >> orchestrator_summary.md
+        echo "| **Total** | **$TOTAL_TESTS** | **100%** |" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        
+        echo "## ⚙️ Summary Configuration" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "- **Time Range**: Last ${{ inputs.summary_timeframe }}" >> orchestrator_summary.md
+        echo "- **Included Tests**: ${{ inputs.test_selection }}" >> orchestrator_summary.md
+        echo "- **Summary Generated**: $(date)" >> orchestrator_summary.md
+        echo "- **Summary Run**: [\#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        
+        # Add detailed results sections
+        if [ $PASSED_TESTS -gt 0 ]; then
+          echo "## ✅ Passed Tests ($PASSED_TESTS)" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+          echo -e "$PASSED_LIST" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        if [ $FAILED_TESTS -gt 0 ]; then
+          echo "## ❌ Failed Tests ($FAILED_TESTS)" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+          echo -e "$FAILED_LIST" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        if [ $TIMEOUT_TESTS -gt 0 ]; then
+          echo "## ⏰ Timed Out Tests ($TIMEOUT_TESTS)" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+          echo -e "$TIMEOUT_LIST" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        if [ $NOT_FOUND_TESTS -gt 0 ]; then
+          echo "## ⚪ Tests Without Recent Runs ($NOT_FOUND_TESTS)" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+          echo -e "$NOT_FOUND_LIST" >> orchestrator_summary.md
+          echo "These tests have no completed runs in the specified time range." >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        if [ $UNKNOWN_TESTS -gt 0 ]; then
+          echo "## ❓ Tests With Unknown Status ($UNKNOWN_TESTS)" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+          echo -e "$UNKNOWN_LIST" >> orchestrator_summary.md
+          echo "" >> orchestrator_summary.md
+        fi
+        
+        echo "## 📋 Usage Instructions" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "### Running Individual FTC Tests" >> orchestrator_summary.md
+        echo "1. Go to **Actions** tab in GitHub" >> orchestrator_summary.md
+        echo "2. Select the specific FTC workflow (e.g., \"FTC1 - Basic Sanity Test\")" >> orchestrator_summary.md
+        echo "3. Click **Run workflow** and configure parameters" >> orchestrator_summary.md
+        echo "4. Each test runs in complete Docker isolation" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "### Generating Updated Summary" >> orchestrator_summary.md
+        echo "1. After running FTC tests, return to **Actions** tab" >> orchestrator_summary.md
+        echo "2. Select \"FTC Suite Results Summary\" workflow" >> orchestrator_summary.md
+        echo "3. Click **Run workflow** and choose appropriate time range" >> orchestrator_summary.md
+        echo "4. Review the generated summary for all test results" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        
+        echo "## 💡 Notes" >> orchestrator_summary.md
+        echo "" >> orchestrator_summary.md
+        echo "- Each FTC test runs independently to avoid port conflicts" >> orchestrator_summary.md
+        echo "- Tests can be run in parallel by triggering multiple workflows" >> orchestrator_summary.md
+        echo "- This summary collects results from recent completed workflow runs" >> orchestrator_summary.md
+        echo "- Click on test names above to view detailed logs and artifacts" >> orchestrator_summary.md
+        
+        # Display summary in workflow log
+        echo "==================== FTC SUITE SUMMARY ===================="
+        cat orchestrator_summary.md
+        echo "=============================================================="
+
+    - name: Upload Summary Report
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: orchestrator-summary
+        name: ftc-suite-summary-${{ github.run_number }}
         path: orchestrator_summary.md
+        retention-days: 30
