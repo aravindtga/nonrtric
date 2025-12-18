@@ -127,7 +127,7 @@ jobs:
         
         # Run the test and capture exit code
         set +e  # Don't exit on error, we want to handle it
-        timeout 2h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --ricsim-prefix "${CONTAINER_PREFIX}" --print-stats --gen-stats 2>&1 | tee test_output.log
+        timeout 2h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --print-stats --gen-stats 2>&1 | tee test_output.log
         TEST_EXIT_CODE=${PIPESTATUS[0]}
         set -e  # Re-enable exit on error
         
