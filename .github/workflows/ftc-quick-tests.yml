@@ -1,0 +1,219 @@
+name: FTC Quick Tests (Short Running)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_env_file:
+        description: 'Test environment file to use'
+        required: true
+        default: '../common/test_env-oran-m-release.sh'
+        type: choice
+        options:
+          - '../common/test_env-oran-m-release.sh'
+          - '../common/test_env-oran-l-release.sh'
+          - '../common/test_env-oran-k-release.sh'
+          - '../common/test_env-onap-paris.sh'
+          - '../common/test_env-onap-oslo.sh'
+      execution_mode:
+        description: 'Execution mode'
+        required: true
+        default: 'remote docker'
+        type: choice
+        options:
+          - 'remote docker'
+          - 'remote-remove docker'
+
+jobs:
+  # Quick tests - typically complete within 1-2 hours
+  ftc-quick-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 hours timeout
+    strategy:
+      fail-fast: false
+      max-parallel: 15  # Each test runs on separate runner instance for Docker isolation
+      matrix:
+        test_case: [
+          'FTC1',           # Basic sanity test
+          'FTC10',          # Basic API test
+          'FTC110',         # Basic API test
+          'FTC150',         # Basic config test
+          'FTC300',         # Config changes
+          'FTC310',         # Config sync
+          'FTC350',         # Config test
+          'FTC800',         # Basic stability
+          'FTC805',         # Stability test
+          'FTC810',         # Stability test
+          'FTC850',         # Stability test
+          'FTC900',         # Misc test
+          'FTC2001',        # Southbound proxy
+          'FTC2002',        # Southbound proxy
+          'FTC2003',        # Southbound proxy
+        ]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          curl \
+          jq \
+          netcat-openbsd \
+          uuid-runtime \
+          bc \
+          python3-pip \
+          python3-venv
+
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install requests pyyaml
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version
+
+    - name: Clean up Docker environment for isolation
+      run: |
+        # Aggressive cleanup to ensure complete isolation
+        docker ps -aq | xargs -r docker rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm || true
+        docker system prune -af --volumes || true
+        
+        # Reset Docker daemon to clean state
+        sudo systemctl restart docker
+        sleep 10
+
+    - name: Create logs directory
+      run: |
+        mkdir -p ${{ github.workspace }}/test/auto-test/logs/${{ matrix.test_case }}
+
+    - name: Run FTC Test - ${{ matrix.test_case }}
+      working-directory: test/auto-test
+      run: |
+        chmod +x ./${{ matrix.test_case }}.sh
+        chmod +x ../common/*.sh
+        
+        # Create unique container prefix for isolation
+        CONTAINER_PREFIX="gh-${{ matrix.test_case }}-$(echo $GITHUB_RUN_ID | tail -c 6)"
+        export RICSIM_PREFIX="${CONTAINER_PREFIX}"
+        export DOCKER_COMPOSE_PROJECT_NAME="${CONTAINER_PREFIX}"
+        
+        timeout 2h ./${{ matrix.test_case }}.sh ${{ github.event.inputs.execution_mode }} --env-file ${{ github.event.inputs.test_env_file }} --ricsim-prefix "${CONTAINER_PREFIX}" --print-stats --gen-stats 2>&1 | tee test_output.log
+        
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+          echo "TEST_RESULT=PASS" >> $GITHUB_ENV
+        elif [ ${PIPESTATUS[0]} -eq 124 ]; then
+          echo "TEST_RESULT=TIMEOUT" >> $GITHUB_ENV
+        else
+          echo "TEST_RESULT=FAIL" >> $GITHUB_ENV
+        fi
+
+    - name: Collect test artifacts
+      if: always()
+      run: |
+        mkdir -p ${{ github.workspace }}/artifacts/${{ matrix.test_case }}
+        
+        if [ -d "test/auto-test/logs/${{ matrix.test_case }}" ]; then
+          cp -r test/auto-test/logs/${{ matrix.test_case }}/* ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        if [ -f "test/auto-test/test_output.log" ]; then
+          cp test/auto-test/test_output.log ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        if [ -f "test/auto-test/.result${{ matrix.test_case }}.txt" ]; then
+          cp test/auto-test/.result${{ matrix.test_case }}.txt ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/ || true
+        fi
+        
+        echo "Test Case: ${{ matrix.test_case }}" > ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Result: ${TEST_RESULT:-UNKNOWN}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Execution Mode: ${{ github.event.inputs.execution_mode }}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Environment File: ${{ github.event.inputs.test_env_file }}" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+        echo "Timestamp: $(date)" >> ${{ github.workspace }}/artifacts/${{ matrix.test_case }}/summary.txt
+
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ftc-quick-results-${{ matrix.test_case }}
+        path: artifacts/${{ matrix.test_case }}/
+        retention-days: 14
+
+    - name: Clean up Docker after test
+      if: always()
+      run: |
+        # Comprehensive cleanup
+        docker ps -aq | xargs -r docker stop -t 10 || true
+        docker ps -aq | xargs -r docker rm -f || true
+        docker network ls -q --filter type=custom | xargs -r docker network rm || true
+        docker volume ls -q | xargs -r docker volume rm -f || true
+        docker images -q | xargs -r docker rmi -f || true
+        docker system prune -af --volumes || true
+
+  test-summary:
+    needs: ftc-quick-tests
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-results
+
+    - name: Generate test summary
+      run: |
+        echo "# FTC Quick Test Results Summary" > test_summary.md
+        echo "" >> test_summary.md
+        echo "**Execution Details:**" >> test_summary.md
+        echo "- Environment File: ${{ github.event.inputs.test_env_file }}" >> test_summary.md
+        echo "- Execution Mode: ${{ github.event.inputs.execution_mode }}" >> test_summary.md
+        echo "- Timestamp: $(date)" >> test_summary.md
+        echo "" >> test_summary.md
+        echo "| Test Case | Result | Duration | Logs |" >> test_summary.md
+        echo "|-----------|--------|----------|------|" >> test_summary.md
+        
+        total_tests=0
+        passed_tests=0
+        
+        for dir in all-results/ftc-quick-results-*/; do
+          if [ -d "$dir" ]; then
+            test_name=$(basename "$dir" | sed 's/ftc-quick-results-//')
+            total_tests=$((total_tests + 1))
+            
+            if [ -f "$dir/summary.txt" ]; then
+              result=$(grep "Result:" "$dir/summary.txt" | cut -d' ' -f2)
+              [ "$result" = "PASS" ] && passed_tests=$((passed_tests + 1))
+              echo "| $test_name | $result | - | [View Logs](all-results/ftc-quick-results-$test_name/) |" >> test_summary.md
+            else
+              echo "| $test_name | UNKNOWN | - | [View Logs](all-results/ftc-quick-results-$test_name/) |" >> test_summary.md
+            fi
+          fi
+        done
+        
+        echo "" >> test_summary.md
+        echo "**Summary Statistics:**" >> test_summary.md
+        echo "- Total Tests: $total_tests" >> test_summary.md
+        echo "- Passed: $passed_tests" >> test_summary.md
+        echo "- Failed: $((total_tests - passed_tests))" >> test_summary.md
+        echo "- Success Rate: $(( passed_tests * 100 / total_tests ))%" >> test_summary.md
+
+    - name: Upload summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: quick-test-summary
+        path: test_summary.md
