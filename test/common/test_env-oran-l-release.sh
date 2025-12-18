@@ -28,7 +28,7 @@ FLAVOUR="ORAN"
 NEXUS_PROXY_REPO="nexus3.o-ran-sc.org:10001/"
 NEXUS_RELEASE_REPO="nexus3.o-ran-sc.org:10002/"
 NEXUS_SNAPSHOT_REPO="nexus3.o-ran-sc.org:10003/"
-NEXUS_STAGING_REPO="nexus3.o-ran-sc.org:10004/"
+NEXUS_STAGING_REPO="nexus3.o-ran-sc.org:10002/"
 
 # Nexus repos for images used by test (not developed by the project)
 NEXUS_RELEASE_REPO_ONAP="nexus3.onap.org:10002/"  # Only for released ONAP images
