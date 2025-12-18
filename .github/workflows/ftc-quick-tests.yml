@@ -127,6 +127,7 @@ jobs:
         mkdir -p test/simulator-group/ics/mnt/db
         mkdir -p test/simulator-group/sdnc/mnt
         mkdir -p test/simulator-group/control_panel/mnt
+        mkdir -p test/simulator-group/ngw/mnt
         mkdir -p test/simulator-group/cr/mnt
         mkdir -p test/simulator-group/prodstub/mnt
         mkdir -p test/simulator-group/mrstub/mnt
@@ -140,6 +141,24 @@ jobs:
         # Control Panel application.properties (for ONAP releases)  
         if [ -f "test/simulator-group/control_panel/application.properties" ]; then
           cp test/simulator-group/control_panel/application.properties test/simulator-group/control_panel/mnt/ || true
+        fi
+        
+        # NonRT-RIC Gateway application.yaml
+        if [ -f "test/simulator-group/ngw/application.yaml" ]; then
+          cp test/simulator-group/ngw/application.yaml test/simulator-group/ngw/mnt/ || true
+        fi
+        
+        # A1PMS application.yaml files
+        if [ -f "test/simulator-group/a1pms/application.yaml" ]; then
+          cp test/simulator-group/a1pms/application.yaml test/simulator-group/a1pms/mnt/ || true
+        fi
+        if [ -f "test/simulator-group/a1pms/application2.yaml" ]; then
+          cp test/simulator-group/a1pms/application2.yaml test/simulator-group/a1pms/mnt/ || true
+        fi
+        
+        # ICS application.yaml
+        if [ -f "test/simulator-group/ics/application.yaml" ]; then
+          cp test/simulator-group/ics/application.yaml test/simulator-group/ics/mnt/ || true
         fi
         
         chmod -R 777 test/simulator-group/*/mnt/ || true
