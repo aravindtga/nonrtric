@@ -123,8 +123,8 @@ jobs:
           # Extract HTTP status code (last 3 characters)
           http_code="${response: -3}"
           
-          if [ "$http_code" == "204" ]; then
-            echo "✅ Successfully triggered $test"
+          if [ "$http_code" == "204" ] || [ "$http_code" == "200" ]; then
+            echo "✅ Successfully triggered $test (HTTP $http_code)"
             TRIGGERED_COUNT=$((TRIGGERED_COUNT + 1))
           else
             echo "❌ Failed to trigger $test (HTTP $http_code)"
@@ -478,3 +478,4 @@ jobs:
         name: ftc-suite-summary-${{ github.run_number }}
         path: orchestrator_summary.md
         retention-days: 30
+
