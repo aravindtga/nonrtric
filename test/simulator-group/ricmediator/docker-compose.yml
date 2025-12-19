@@ -30,8 +30,8 @@ services:
     networks:
       - default
     ports:
-      - ${RICMEDIATOR_SIM_INTERNAL_PORT}/tcp
-      - ${RICMEDIATOR_SIM_INTERNAL_SECURE_PORT}/tcp
+      - "${RICMEDIATOR_SIM_INTERNAL_PORT}"
+      - "${RICMEDIATOR_SIM_INTERNAL_SECURE_PORT}"
     environment:
       - DBAAS_SERVICE_HOST=dbaas
       - DBAAS_SERVICE_PORT=6379
