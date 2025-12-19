@@ -31,8 +31,8 @@ services:
     networks:
       - default
     ports:
-      - ${RIC_SIM_INTERNAL_PORT}/tcp
-      - ${RIC_SIM_INTERNAL_SECURE_PORT}/tcp
+      - "${RIC_SIM_INTERNAL_PORT}"
+      - "${RIC_SIM_INTERNAL_SECURE_PORT}"
     environment:
       - A1_VERSION=${RICSIM_COMPOSE_A1_VERSION}
       - REMOTE_HOSTS_LOGGING=1
