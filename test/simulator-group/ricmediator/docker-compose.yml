@@ -29,7 +29,7 @@ services:
     image: ${RICMEDIATOR_SIM_IMAGE}
     networks:
       - default
-    ports:
+    expose:
       - "${RICMEDIATOR_SIM_INTERNAL_PORT}"
       - "${RICMEDIATOR_SIM_INTERNAL_SECURE_PORT}"
     environment:
@@ -44,7 +44,7 @@ services:
     image: ${RICMEDIATOR_SIM_DB_IMAGE}
     networks:
       - default
-    ports:
+    expose:
       - 6379/tcp
     labels:
       - "nrttest_app=RICMEDIATORSIM"

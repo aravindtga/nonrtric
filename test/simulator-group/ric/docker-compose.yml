@@ -30,7 +30,7 @@ services:
     image: ${RIC_SIM_IMAGE}
     networks:
       - default
-    ports:
+    expose:
       - "${RIC_SIM_INTERNAL_PORT}"
       - "${RIC_SIM_INTERNAL_SECURE_PORT}"
     environment:
