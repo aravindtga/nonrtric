@@ -27,8 +27,8 @@ services:
       - default
     image: ${CR_IMAGE}
     ports:
-      - ${CR_INTERNAL_PORT}/tcp
-      - ${CR_INTERNAL_SECURE_PORT}/tcp
+      - "${CR_INTERNAL_PORT}"
+      - "${CR_INTERNAL_SECURE_PORT}"
     labels:
       - "nrttest_app=CR"
       - "nrttest_dp=${CR_DISPLAY_NAME}"
